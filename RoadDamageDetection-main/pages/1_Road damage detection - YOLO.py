@@ -89,7 +89,7 @@ if image_file is None:
     st.info("👆 Upload an image to start detection")
 else:
     if net is None:
-        st.error("YOLO model not loaded. Make sure models/yolo.pt exists in the repo and redeploy.")
+        st.error(f"YOLO model not loaded. Make sure models/{MODEL_FILENAME} exists in the repo and redeploy.")
     else:
         try:
             image = Image.open(image_file)
@@ -97,7 +97,11 @@ else:
                 image = image.convert("RGB")
 
             st.subheader("Original Image")
-            st.image(image, use_container_width=True)
+            # robust display for different Streamlit versions
+            try:
+                st.image(image, use_container_width=True)
+            except TypeError:
+                st.image(image, use_column_width=True)
 
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -134,8 +138,10 @@ else:
                                 conf = float(confs[i])
                                 box = xyxy[i].astype(int)
                                 boxes.append(
-                                    NamedTuple("Tmp", [("cls", int), ("conf", float), ("xyxy", np.ndarray)])(class_id,
-                                                                                                             conf, box))
+                                    NamedTuple("Tmp", [("cls", int), ("conf", float), ("xyxy", np.ndarray)])(
+                                        class_id, conf, box
+                                    )
+                                )
 
                     # parse boxes
                     for b in boxes:
@@ -187,7 +193,11 @@ else:
                     st.warning("⚠️ No detections above the confidence threshold. Try lowering the threshold.")
 
                 st.subheader("Annotated Image")
-                st.image(annotated, use_container_width=True)
+                # robust display for different Streamlit versions
+                try:
+                    st.image(annotated, use_container_width=True)
+                except TypeError:
+                    st.image(annotated, use_column_width=True)
 
                 # Download annotated image
                 from io import BytesIO
