@@ -1,21 +1,17 @@
-import os
+# pages/yolo.py
 import logging
 from pathlib import Path
 from typing import NamedTuple
-
-import cv2
 import numpy as np
 import streamlit as st
-
-# Deep learning framework
-from ultralytics import YOLO
 from PIL import Image
-from io import BytesIO
+import cv2
 
-from sample_utils.download import download_file
+# ultralytics
+from ultralytics import YOLO
 
 st.set_page_config(
-    page_title="Road damage detection - YOLOv12",
+    page_title="Road damage detection - YOLO",
     page_icon="📷",
     layout="centered",
     initial_sidebar_state="expanded"
@@ -25,63 +21,25 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-MODEL_URL = "https://github.com/achilis1505/RoadDamageDetection/raw/main/models/YOLOv12_Road_Defects_Model.pt"  # noqa: E501
-MODEL_LOCAL_PATH = ROOT / "./models/YOLOv12_Road_Defects_Model.pt"
+# Single place to set your local YOLO model filename
+MODEL_DIR = ROOT / "models"
+MODEL_FILENAME = "yolov12.pt"  # <-- change to your actual filename if different
+MODEL_LOCAL_PATH = MODEL_DIR / MODEL_FILENAME
 
-# Download the model if it doesn't exist
-@st.cache_resource
-def download_yolo_model():
-    try:
-        # Check if model directory exists
-        model_dir = MODEL_LOCAL_PATH.parent
-        model_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Download model if it doesn't exist
-        if not MODEL_LOCAL_PATH.exists():
-            with st.spinner("Downloading YOLOv12 model... This may take a few moments."):
-                try:
-                    download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=None)
-                    if MODEL_LOCAL_PATH.exists():
-                        st.success("✅ YOLOv12 model downloaded successfully!")
-                        return str(MODEL_LOCAL_PATH)
-                    else:
-                        raise Exception("Download completed but file not found")
-                except Exception as download_error:
-                    st.error(f"❌ Failed to download model: {download_error}")
-                    return None
-        else:
-            return str(MODEL_LOCAL_PATH)
-            
-    except Exception as e:
-        logger.error(f"Failed to download model: {e}")
-        st.error("⚠️ Could not download YOLOv12 model.")
-        return None
+# Ensure models folder exists
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load the YOLO model
-@st.cache_resource
-def load_yolo_model():
-    try:
-        model_path = download_yolo_model()
-        if model_path:
-            return YOLO(model_path)
-        return None
-    except Exception as e:
-        logger.error(f"Failed to load YOLO model: {e}")
-        st.error(f"⚠️ Error loading YOLO model: {str(e)}")
-        return None
-
-# Load the model
-with st.spinner("Loading YOLOv12 model..."):
-    net = load_yolo_model()
-
+# Unified class names (use same order as ResNet mapping if you want consistency)
 CLASSES = [
-    "alligator cracking",  # Index 0
-    "linear cracking",     # Index 1
-    "patching",            # Index 2
-    "pothole",             # Index 3
-    "rutting"              # Index 4
+    "Crack",
+    "Alligator Crack",
+    "Pothole",
+    "Patch",
+    "Rutting"
 ]
+
 
 class Detection(NamedTuple):
     class_id: int
@@ -89,157 +47,162 @@ class Detection(NamedTuple):
     score: float
     box: np.ndarray
 
-st.title("Road Damage Detection - YOLOv12")
 
+@st.cache_resource
+def load_yolo_model(path: str):
+    try:
+        if not Path(path).exists():
+            logger.warning(f"YOLO model not found at {path}")
+            return None
+        # Loading model via ultralytics
+        model = YOLO(path)
+        return model
+    except Exception as e:
+        logger.error(f"Failed to load YOLO model: {e}")
+        return None
+
+
+with st.spinner("Loading YOLO model..."):
+    net = load_yolo_model(str(MODEL_LOCAL_PATH))
+
+st.title("Road Damage Detection - YOLO")
 st.write("""
-Detect road damage using a YOLOv12 deep learning model. This approach uses object detection 
-to identify and locate specific damage types in road images with bounding boxes around detected areas.
+Detect road damage using a YOLO-based detector. Upload an image to detect and localize damage types.
 """)
 
-st.write("Upload an image to detect road damage and get precise locations of damage areas.")
-
-# File upload
 image_file = st.file_uploader(
-    "Choose an image file", 
+    "Choose an image file",
     type=['png', 'jpg', 'jpeg'],
     help="Upload an image of a road to detect damage"
 )
 
-# Confidence threshold
 score_threshold = st.slider(
-    "Confidence Threshold", 
-    min_value=0.0, 
-    max_value=1.0, 
-    value=0.15, 
-    step=0.05,
+    "Confidence Threshold",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.15,
+    step=0.01,
     help="Lower the threshold if no damage is detected, increase if there are false predictions"
 )
 
-if image_file is not None and net is not None:
-    try:
-        # Load the image
-        image = Image.open(image_file)
-        
-        # Display image in single column for better UI
-        st.subheader("Original Image")
+if image_file is None:
+    st.info("👆 Upload an image to start detection")
+else:
+    if net is None:
+        st.error("YOLO model not loaded. Make sure models/yolo.pt exists in the repo and redeploy.")
+    else:
         try:
-            st.image(image, caption="Uploaded Image", use_container_width=True)
-        except TypeError:
-            # Fallback for older Streamlit versions
-            st.image(image, caption="Uploaded Image", use_column_width=True)
-        
-        # Show image info in a more compact way
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Width", f"{image.size[0]}px")
-        with col2:
-            st.metric("Height", f"{image.size[1]}px")
-        with col3:
-            st.metric("Mode", image.mode)
-        
-        st.divider()
-        
-        st.subheader("Detection Results")
-        
-        # Perform detection
-        with st.spinner("Detecting road damage using YOLOv12..."):
-            try:
-                # Perform inference
-                # Convert image to RGB if it's not already (handles grayscale images)
-                if image.mode != 'RGB':
-                    image = image.convert('RGB')
-                
-                _image = np.array(image)
-                h_ori = _image.shape[0]
-                w_ori = _image.shape[1]
+            image = Image.open(image_file)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
 
-                image_resized = cv2.resize(_image, (640, 640), interpolation=cv2.INTER_AREA)
-                results = net.predict(image_resized, conf=score_threshold)
-                
-                # Save the results
+            st.subheader("Original Image")
+            st.image(image, use_container_width=True)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Width", f"{image.size[0]}px")
+            with col2:
+                st.metric("Height", f"{image.size[1]}px")
+            with col3:
+                st.metric("Mode", image.mode)
+
+            st.divider()
+            st.subheader("Detection Results")
+
+            # prepare image for model, prefer letting ultralytics accept PIL/ndarray
+            img_np = np.array(image)
+
+            with st.spinner("Detecting road damage..."):
+                # ultralytics model accepts images directly; pass conf param
+                results = net.predict(img_np, conf=score_threshold, verbose=False)
+
                 detections = []
-                for result in results:
-                    boxes = result.boxes.cpu().numpy()
-                    detections = [
-                       Detection(
-                           class_id=int(_box.cls),
-                           label=CLASSES[int(_box.cls)],
-                           score=float(_box.conf),
-                           box=_box.xyxy[0].astype(int),
-                        )
-                        for _box in boxes
-                    ]
+                for r in results:
+                    # r.boxes is a Boxes object; convert safely
+                    try:
+                        boxes = r.boxes.cpu().numpy()
+                    except Exception:
+                        # fallback: use r.boxes.xyxy, r.boxes.conf, r.boxes.cls
+                        boxes = []
+                        if hasattr(r.boxes, "xyxy"):
+                            xyxy = r.boxes.xyxy.cpu().numpy()
+                            confs = r.boxes.conf.cpu().numpy()
+                            cls = r.boxes.cls.cpu().numpy()
+                            for i in range(len(xyxy)):
+                                class_id = int(cls[i])
+                                conf = float(confs[i])
+                                box = xyxy[i].astype(int)
+                                boxes.append(
+                                    NamedTuple("Tmp", [("cls", int), ("conf", float), ("xyxy", np.ndarray)])(class_id,
+                                                                                                             conf, box))
 
-                annotated_frame = results[0].plot()
-                _image_pred = cv2.resize(annotated_frame, (w_ori, h_ori), interpolation=cv2.INTER_AREA)
-                
-                # Show detection summary
+                    # parse boxes
+                    for b in boxes:
+                        # support for ultralytics vX shape
+                        try:
+                            class_id = int(getattr(b, "cls", b[0]))
+                            conf = float(getattr(b, "conf", b[1]))
+                            box = getattr(b, "xyxy", b[2]) if hasattr(b, "xyxy") else np.array(b[2]).astype(int)
+                        except Exception:
+                            # try index style
+                            vals = list(b)
+                            if len(vals) >= 4:
+                                class_id = int(vals[0])
+                                conf = float(vals[1])
+                                box = np.array(vals[-1]).astype(int)
+                            else:
+                                continue
+
+                        label = CLASSES[class_id] if class_id < len(CLASSES) else f"class_{class_id}"
+                        detections.append(Detection(class_id=class_id, label=label, score=conf, box=box))
+
+                # annotated image from model
+                try:
+                    annotated = results[0].plot()
+                    # ultralytics returns numpy array in RGB
+                    annotated = cv2.resize(annotated, (image.size[0], image.size[1]), interpolation=cv2.INTER_AREA)
+                except Exception as e:
+                    logger.warning(f"Could not get annotated image from results: {e}")
+                    annotated = img_np
+
+                # display summary
                 if detections:
                     st.success(f"🎯 **{len(detections)} damage(s) detected**")
-                    
-                    # Group detections by class
                     damage_counts = {}
-                    for detection in detections:
-                        if detection.label in damage_counts:
-                            damage_counts[detection.label] += 1
-                        else:
-                            damage_counts[detection.label] = 1
-                    
-                    # Display detected damage types in a green box
-                    damage_list = "\n\n".join([f"• ***{damage_type}: {count} instance(s)***" for damage_type, count in damage_counts.items()])
+                    for d in detections:
+                        damage_counts[d.label] = damage_counts.get(d.label, 0) + 1
+
+                    damage_list = "\n\n".join([f"• ***{k}: {v} instance(s)***" for k, v in damage_counts.items()])
                     st.success(f"**Detected Damage Types:**\n\n{damage_list}")
-                    
-                    # Show detailed detections
+
                     with st.expander("📋 Detailed Detection Results"):
-                        for i, detection in enumerate(detections, 1):
+                        for i, d in enumerate(detections, 1):
                             st.write(f"**Detection {i}:**")
-                            st.write(f"- Type: {detection.label}")
-                            st.write(f"- Confidence: {detection.score:.2%}")
-                            st.write(f"- Bounding Box: {detection.box}")
+                            st.write(f"- Type: {d.label}")
+                            st.write(f"- Confidence: {d.score:.2%}")
+                            st.write(f"- Bounding Box: {d.box}")
                             st.divider()
                 else:
-                    st.warning("⚠️ No damage detected above the confidence threshold")
-                    st.info("💡 Try lowering the confidence threshold if you expect damage to be present")
-                
-                # Display the prediction image
+                    st.warning("⚠️ No detections above the confidence threshold. Try lowering the threshold.")
+
                 st.subheader("Annotated Image")
-                try:
-                    st.image(_image_pred, caption="Image with detected damage highlighted", use_container_width=True)
-                except TypeError:
-                    # Fallback for older Streamlit versions
-                    st.image(_image_pred, caption="Image with detected damage highlighted", use_column_width=True)
+                st.image(annotated, use_container_width=True)
 
-                # Download predicted image
-                buffer = BytesIO()
-                _downloadImages = Image.fromarray(_image_pred)
-                _downloadImages.save(buffer, format="PNG")
-                _downloadImagesByte = buffer.getvalue()
+                # Download annotated image
+                from io import BytesIO
 
-                st.download_button(
-                    label="📥 Download Prediction Image",
-                    data=_downloadImagesByte,
-                    file_name="RDD_Prediction.png",
-                    mime="image/png",
-                    help="Download the image with detected damage annotations"
-                )
-                
-                # Device info
-                device_info = "GPU (CUDA)" if hasattr(net, 'device') and 'cuda' in str(net.device) else "CPU"
+                im_pil = Image.fromarray(annotated)
+                buf = BytesIO()
+                im_pil.save(buf, format="PNG")
+                buf_bytes = buf.getvalue()
+
+                st.download_button("📥 Download Prediction Image", data=buf_bytes, file_name="yolo_prediction.png",
+                                   mime="image/png")
+
+                device_info = "GPU (CUDA)" if hasattr(net, "device") and "cuda" in str(net.device) else "CPU"
                 st.info(f"**Inference Device:** {device_info}")
-                
-            except Exception as e:
-                st.error(f"Error during detection: {str(e)}")
-                logger.error(f"Detection error: {e}")
-                st.write("**Possible solutions:**")
-                st.write("- Ensure the image is a valid road image")
-                st.write("- Try a different image format")
-                st.write("- Check if the model loaded correctly")
-    
-    except Exception as e:
-        st.error(f"Error processing uploaded image: {str(e)}")
-        st.write("Please try uploading a different image file.")
 
-elif image_file is not None and net is None:
-    st.error("❌ YOLOv12 model failed to load. Please check your internet connection and try refreshing the page.")
-elif image_file is None:
-    st.info("👆 Please upload an image to start detection")
+        except Exception as e:
+            st.error(f"Error during detection: {e}")
+            logger.exception(e)
