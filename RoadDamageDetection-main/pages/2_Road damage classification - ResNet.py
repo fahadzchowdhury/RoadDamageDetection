@@ -1,11 +1,10 @@
-# resnet_image.py
+# pages/resnet.py
 import os
 import logging
 from pathlib import Path
 from typing import NamedTuple
 import io
 
-import cv2
 import numpy as np
 import streamlit as st
 
@@ -32,13 +31,11 @@ logging.basicConfig(level=logging.INFO)
 
 # Single place to set your local model filename
 MODEL_DIR = ROOT / "models"
-MODEL_FILENAME = "road_defects_resnet50.pth"   # <-- change this if your file has a different name
+MODEL_FILENAME = "resnet.pth"   # change if your filename differs
 MODEL_LOCAL_PATH = MODEL_DIR / MODEL_FILENAME
 
-# Ensure models folder exists (no downloads here)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# ResNet model configuration
 class ImageClassifier:
     def __init__(self, model_path=None, num_classes=5):
         self.model_path = model_path
@@ -53,22 +50,17 @@ class ImageClassifier:
         logger.info(f"Initialized ImageClassifier with device: {self.device}")
 
     def load_model(self):
-        """Initialize and load the model (robust to different checkpoint formats)."""
         if self.model is not None:
             return
 
         logger.info("Initializing ResNet50 with ImageNet weights")
-        # Use ImageNet pretrained backbone
         self.model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
 
-        # Freeze feature extractor layers
         logger.info("Freezing feature extraction layers")
         for name, param in self.model.named_parameters():
             if not name.startswith('fc'):
                 param.requires_grad = False
 
-        # Replace the fully connected layer (matches your UI expectations)
-        logger.info(f"Modifying final layer for {self.num_classes} classes")
         in_features = self.model.fc.in_features
         self.model.fc = nn.Sequential(
             nn.Linear(in_features, 512),
@@ -78,36 +70,27 @@ class ImageClassifier:
             nn.Sigmoid()
         )
 
-        # Load pre-trained weights if available locally
         if self.model_path and os.path.exists(self.model_path):
             try:
                 logger.info(f"Attempting to load model weights from {self.model_path}")
-                # Load checkpoint
                 checkpoint = torch.load(self.model_path, map_location=self.device)
 
-                # Normalize checkpoint to a state_dict
                 if isinstance(checkpoint, dict):
-                    # Common keys: 'state_dict', 'model_state_dict', or direct state_dict
                     if 'state_dict' in checkpoint and isinstance(checkpoint['state_dict'], dict):
                         state_dict = checkpoint['state_dict']
                     elif 'model_state_dict' in checkpoint and isinstance(checkpoint['model_state_dict'], dict):
                         state_dict = checkpoint['model_state_dict']
                     else:
-                        # Assume checkpoint itself is a state dict
                         state_dict = checkpoint
                 else:
-                    # Unexpected format, fail gracefully and continue with ImageNet head
                     raise ValueError("Unexpected checkpoint format")
 
-                # Some state_dict keys may be prefixed (like 'module.'), remove if present
+                # strip 'module.' prefix if present
                 new_state_dict = {}
                 for k, v in state_dict.items():
-                    new_key = k
-                    if k.startswith("module."):
-                        new_key = k[len("module."):]
+                    new_key = k[len("module."):] if k.startswith("module.") else k
                     new_state_dict[new_key] = v
 
-                # Try strict loading first; fall back to non-strict
                 try:
                     self.model.load_state_dict(new_state_dict, strict=True)
                     logger.info("Loaded model weights with strict=True")
@@ -127,12 +110,9 @@ class ImageClassifier:
         logger.info("Model initialized and moved to device")
 
     def predict(self, image_input, threshold=0.5):
-        """Make a prediction on an image"""
-        # Ensure model is loaded
         if self.model is None:
             self.load_model()
 
-        # Handle different input types
         if isinstance(image_input, bytes):
             image = Image.open(io.BytesIO(image_input))
         elif isinstance(image_input, Image.Image):
@@ -170,7 +150,6 @@ class ImageClassifier:
             "model_loaded": self.model_path is not None and os.path.exists(self.model_path) if self.model_path else False
         }
 
-# Initialize ResNet classifier using local model path
 resnet_classifier = ImageClassifier(model_path=str(MODEL_LOCAL_PATH), num_classes=5)
 with st.spinner("Loading ResNet model..."):
     resnet_classifier.load_model()
@@ -212,9 +191,14 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.subheader("Original Image")
     try:
-        st.image(image, caption="Uploaded Image", use_container_width=True)
-    except TypeError:
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+        # robust display for different Streamlit versions
+        try:
+            st.image(image, caption="Uploaded Image", use_container_width=True)
+        except TypeError:
+            st.image(image, caption="Uploaded Image", use_column_width=True)
+    except Exception:
+        # fallback plain display
+        st.image(image)
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -225,6 +209,7 @@ if uploaded_file is not None:
         st.metric("Mode", image.mode)
 
     st.divider()
+
     st.subheader("Classification Results")
 
     with st.spinner("Classifying image using ResNet..."):
@@ -274,9 +259,5 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Error during classification: {str(e)}")
             logger.error(f"Classification error: {e}")
-            st.write("**Possible solutions:**")
-            st.write("- Ensure the image is a valid road image")
-            st.write("- Try a different image format")
-            st.write("- Check if the model loaded correctly")
 else:
     st.info("👆 Please upload an image to start classification")
